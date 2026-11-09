@@ -1,0 +1,17 @@
+{
+  "defaultProfile": "dev",
+  "profiles": {
+    "dev": {
+      "endpoint": "https://xxl-job.example.com/xxl-job-admin",
+      "username": "automation",
+      "passwordEnv": "XXL_JOB_DEV_PASSWORD",
+      "apiVersion": "3"
+    },
+    "legacy": {
+      "endpoint": "https://legacy.example.com/xxl-job-admin",
+      "username": "automation",
+      "passwordEnv": "XXL_JOB_LEGACY_PASSWORD",
+      "apiVersion": "2"
+    }
+  }
+}

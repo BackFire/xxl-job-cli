@@ -1,0 +1,16 @@
+{
+  "jobGroup": 1,
+  "jobDesc": "Example synchronization",
+  "author": "operator",
+  "scheduleType": "CRON",
+  "scheduleConf": "0 0 2 * * ?",
+  "misfireStrategy": "DO_NOTHING",
+  "executorRouteStrategy": "FIRST",
+  "executorHandler": "syncJobHandler",
+  "executorParam": "",
+  "executorBlockStrategy": "SERIAL_EXECUTION",
+  "executorTimeout": 0,
+  "executorFailRetryCount": 0,
+  "glueType": "BEAN",
+  "childJobId": ""
+}

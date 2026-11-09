@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test -race -cover ./...
+      - run: go build ./cmd/xxl-job
+
+  upstream:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: '2.3.0'
+            ref: 'a1d4f1aedac271e27e32da172cc963b153b47de3'
+            api: '2'
+          - image: '3.0.0'
+            ref: 'b8c5b5af6c0e762ebe7a8063fc5703673d8ec6a5'
+            api: '3.0'
+          - image: '3.1.1'
+            ref: 'cdb54254d0dc8cb3219102c095419c8b225c9e8a'
+            api: '3.1'
+          - image: '3.2.0'
+            ref: '57b181b480b05f785826dfb14c5f5b9b1da7a580'
+            api: '3.2'
+          - image: '3.3.2'
+            ref: '5658650fdb7b00bc0f44141f0aa9b772d65190f9'
+            api: '3.3'
+          - image: '3.4.0'
+            ref: '555b48f2edf0e51cd77971565342d80c15c9f18d'
+            api: '3.4'
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: integration-only
+          MYSQL_ROOT_HOST: '%'
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pintegration-only"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.x'
+      - name: Start upstream XXL-JOB
+        env:
+          MYSQL_CONTAINER: ${{ job.services.mysql.id }}
+          UPSTREAM_REF: ${{ matrix.ref }}
+          UPSTREAM_IMAGE: ${{ matrix.image }}
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://raw.githubusercontent.com/xuxueli/xxl-job/${UPSTREAM_REF}/doc/db/tables_xxl_job.sql" |
+            docker exec -i "$MYSQL_CONTAINER" mysql -uroot -pintegration-only
+          network=$(docker inspect -f '{{range $name, $config := .NetworkSettings.Networks}}{{$name}}{{end}}' "$MYSQL_CONTAINER")
+          docker run -d --name xxl-job-e2e --network "$network" -p 127.0.0.1:8080:8080 \
+            -e 'PARAMS=--spring.datasource.url=jdbc:mysql://mysql:3306/xxl_job?useUnicode=true&characterEncoding=UTF-8&allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=Asia/Shanghai --spring.datasource.username=root --spring.datasource.password=integration-only' \
+            "xuxueli/xxl-job-admin:${UPSTREAM_IMAGE}"
+          for attempt in $(seq 1 120); do
+            if curl -fsS --max-time 2 http://127.0.0.1:8080/xxl-job-admin/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs --tail 100 xxl-job-e2e
+          exit 1
+      - name: Exercise the upstream admin API
+        env:
+          XXL_JOB_ENDPOINT: http://127.0.0.1:8080/xxl-job-admin
+          XXL_JOB_USERNAME: admin
+          XXL_JOB_PASSWORD: '123456'
+          XXL_JOB_API_VERSION: ${{ matrix.api }}
+        run: |
+          set -euo pipefail
+          go build -o "$RUNNER_TEMP/xxl-job" ./cmd/xxl-job
+          cli="$RUNNER_TEMP/xxl-job"
+          "$cli" group list | jq -e '.total >= 1 and (.data | type == "array")'
+          id=$("$cli" job create --file examples/job.json | jq -er '.data | tonumber')
+          "$cli" job get --group 1 --id "$id" | jq -e '.data.jobDesc == "Example synchronization"'
+          "$cli" job update --group 1 --id "$id" --file examples/job-patch.json
+          "$cli" job get --group 1 --id "$id" | jq -e '.data.scheduleConf == "0 30 2 * * ?"'
+          "$cli" job next --type CRON --schedule '0 0 2 * * ?' | jq -e '(.data | length) > 0'
+          "$cli" job start --id "$id"
+          "$cli" job stop --id "$id"
+          "$cli" job trigger --id "$id"
+          "$cli" log list --group 1 --job-id "$id" | jq -e '(.data | type) == "array"'
+          "$cli" job delete --id "$id"
+      - name: Show upstream logs on failure
+        if: failure()
+        run: docker logs --tail 100 xxl-job-e2e || true
